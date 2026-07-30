@@ -77,28 +77,36 @@ export function describeMutation(toolName: string, params: unknown): MutationDes
   }
 
   const { verb, entity } = splitName(normalized);
-  const lines: string[] = [`${verb} ${entity} on LIVE books.`, ""];
+
+  // Rendered as a SINGLE LINE. Claude Code's approval dialog collapses
+  // whitespace in permissionDecisionReason, so newlines and blank-line
+  // grouping are lost, and the summary sits above a large JSON dump of the
+  // tool arguments. Verified live: a three-line summary rendered as one
+  // run-on sentence and read as noise. Use explicit separators, put the
+  // irreversibility warning last where it terminates the line, and keep it
+  // short enough to survive next to the JSON.
+  const parts: string[] = [`${verb} ${entity} on LIVE books`];
 
   const label = firstString(p, ["DisplayName", "Name", "CompanyName", "doc_number", "DocNumber"]);
-  if (label !== null) lines.push(`Record: ${label}`);
+  if (label !== null) parts.push(label);
   // extractAmount guarantees a non-null return is finite (see its docstring
   // and the Number.isFinite check at its end) and only ever overstates, so
   // this null check alone is sufficient to keep NaN/undefined/garbled
   // figures out of text a human approves against.
-  if (amount !== null) lines.push(`Amount: ${usd(amount)}`);
+  if (amount !== null) parts.push(usd(amount));
   const date = firstString(p, ["txn_date", "TxnDate"]);
-  if (date !== null) lines.push(`Date: ${date}`);
+  if (date !== null) parts.push(date);
   const id = firstString(p, ["idOrEntity", "id", "Id"]);
-  if (id !== null) lines.push(`Id: ${id}`);
+  if (id !== null) parts.push(`Id ${id}`);
 
   if (reasons.includes("unrecognized-tool")) {
-    lines.push("", "Unrecognized tool - asking by default.");
+    parts.push("UNRECOGNIZED TOOL, asking by default");
   }
   if (verb === "DELETE") {
-    lines.push("", "Irreversible. Recoverable only via the QuickBooks Audit Log.");
+    parts.push("IRREVERSIBLE, recoverable only via the QuickBooks Audit Log");
   }
 
-  let summary = lines.join("\n");
+  let summary = parts.join(" \u00B7 ");
   if (summary.length > SUMMARY_MAX_CHARS) {
     summary = `${summary.slice(0, SUMMARY_MAX_CHARS - 16)}... (truncated)`;
   }

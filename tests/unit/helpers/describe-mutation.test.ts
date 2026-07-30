@@ -6,7 +6,7 @@ describe("describeMutation fail-closed rules", () => {
     const d = describeMutation("create_widget", {});
     expect(d.tier).toBe("ALWAYS");
     expect(d.reasons).toContain("unrecognized-tool");
-    expect(d.summary).toContain("Unrecognized tool");
+    expect(d.summary).toContain("UNRECOGNIZED TOOL");
   });
 
   it("leaves ALWAYS tools as ALWAYS", () => {
@@ -47,6 +47,32 @@ describe("describeMutation fail-closed rules", () => {
 });
 
 describe("describeMutation summary", () => {
+  // The approval dialog collapses whitespace in permissionDecisionReason, so a
+  // multi-line summary renders as one run-on sentence. These pin the
+  // single-line contract; a regression to newline formatting fails here.
+  it("renders as a single line with no newlines", () => {
+    for (const [tool, params] of [
+      ["delete_invoice", { idOrEntity: "1042" }],
+      ["create_invoice", { DisplayName: "Acme", TotalAmt: 5000, txn_date: "2026-07-14" }],
+      ["create_widget", {}],
+      ["create_customer", { DisplayName: "Bolt Co" }],
+    ] as const) {
+      const s = describeMutation(tool, { params }).summary;
+      expect(s).not.toContain("\n");
+      expect(s).not.toMatch(/\s{2,}/);
+    }
+  });
+
+  it("separates facts with a visible delimiter", () => {
+    const s = describeMutation("create_invoice", { params: { DisplayName: "Acme", TotalAmt: 5000 } }).summary;
+    expect(s).toContain(" \u00B7 ");
+  });
+
+  it("puts the irreversibility warning at the end of the line", () => {
+    const s = describeMutation("delete_invoice", { params: { idOrEntity: "1" } }).summary;
+    expect(s.endsWith("IRREVERSIBLE, recoverable only via the QuickBooks Audit Log")).toBe(true);
+  });
+
   it("names the verb, entity, and live books", () => {
     const s = describeMutation("delete_invoice", { idOrEntity: "1042" }).summary;
     expect(s).toContain("DELETE");
