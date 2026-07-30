@@ -142,6 +142,25 @@ QUICKBOOKS_ENVIRONMENT=sandbox        # or production
 # QUICKBOOKS_DISABLE_DELETE=true
 ```
 
+#### Store the client secret in the Keychain
+
+The `bin/` wrappers read the client secret from the macOS Keychain rather than
+`.env`, so anything that merely reads `.env` gets a refresh token it cannot use.
+Create the entry once — it prompts twice, with no echo:
+
+```bash
+security add-generic-password -a "$(id -un)" -s qbo-prod-client-secret -U -w
+```
+
+Override the account name with `QBO_KEYCHAIN_ACCOUNT` if you need to. Deliberately
+**do not** put `QUICKBOOKS_CLIENT_SECRET` in `.env`: dotenv runs with
+`override: true`, so a value there beats the one the wrapper exports and silently
+defeats the split.
+
+If you're not on macOS, or you launch `dist/index.js` directly instead of through
+`bin/`, put `QUICKBOOKS_CLIENT_SECRET` in `.env` and accept that the secret and
+the refresh token live in the same file.
+
 See [Authentication](#authentication) for how to obtain a refresh token —
 sandbox and production differ, and production is the fiddly one.
 
