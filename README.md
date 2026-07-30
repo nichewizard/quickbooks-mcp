@@ -7,9 +7,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tools](https://img.shields.io/badge/Tools-141-green.svg)](#available-tools)
 [![Read--only mode](https://img.shields.io/badge/Read--only_mode-70_tools-teal.svg)](#read-only-is-a-first-class-mode)
-[![Writes](https://img.shields.io/badge/Writes-human_approved-critical.svg)](#1-writes-pause-for-a-human)
+[![Writes](https://img.shields.io/badge/Risky_writes-52_require_approval-critical.svg)](#1-risky-writes-require-your-approval)
 [![Injection](https://img.shields.io/badge/Untrusted_text-delimited_%2B_flagged-orange.svg)](#2-quickbooks-text-is-treated-as-untrusted-input)
-[![Tests](https://img.shields.io/badge/Tests-818-blue.svg)](#testing)
+[![Tests](https://img.shields.io/badge/Tests-771-blue.svg)](#testing)
 [![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen.svg)](#testing)
 
 [Safety Model](#safety-model) | [Quick Start](#quick-start) | [Available Tools](#available-tools) | [Authentication](#authentication) | [Limitations](#honest-limitations)
@@ -33,32 +33,33 @@ out of QuickBooks is treated as data rather than instructions**.
 
 ## Safety model
 
-### 1. Writes pause for a human
+This server is built for use against **real books**. It exposes 141 QuickBooks
+Online tools — or 70 in read-only mode — with two safeguards around them.
 
-Every `create_*`, `update_*` and `delete_*` call surfaces an approval prompt
-describing the operation in plain English *before* it executes:
+### 1. Risky writes require your approval
 
-```
-DELETE invoice on LIVE books.
+52 of the 141 tools are classified as always-ask: every delete, every money
+movement (payments, transfers, deposits, refunds), journal entries, transaction
+documents (invoices, bills, estimates, purchases, credit memos), file uploads,
+and structural edits like `update_account`. Calling one produces an approval
+dialog naming the tool and showing the full arguments. Nothing executes until
+you approve.
 
-Id: 1042
-
-Irreversible. Recoverable only via the QuickBooks Audit Log.
-```
-
-Money documents always prompt, regardless of amount. Master-data creates
-(customers, vendors, items, classes) execute and are reported afterwards, so
-bulk setup work stays usable.
+19 tools are classified as auto: master data — customers, vendors, employees,
+items, classes, departments, terms, payment methods, time activities, and
+`create_account`. These execute without prompting, so bulk setup work stays
+usable.
 
 | Tier | Behaviour | Tools |
 |:--|:--|--:|
-| **Always ask** | invoices, bills, estimates, purchases, payments, journal entries, transfers, deposits, credit memos, attachments, every delete | 52 |
-| **Auto** | customers, vendors, employees, items, accounts, classes, departments, terms, payment methods, time activities | 19 |
+| **Always ask** | deletes, money movement, journal entries, transaction documents, attachments, `update_account`, `update_company_info` | 52 |
+| **Auto** | master data | 19 |
+| Read | `get_*`, `search_*`, `read_*` | 70 |
 
-**The gate fails closed.** Unparseable input, a missing build, a crashed
-summariser — every error path produces a prompt, never silent execution. An
-unrecognised tool name asks by default, so a tool added later is gated before
-anyone remembers to classify it.
+Enforcement is by Claude Code's own permission rules, not by this server — see
+[Installing the approval gate](#installing-the-approval-gate). That matters: the
+rules are honoured in every permission mode, including `auto` and
+`bypassPermissions`.
 
 ### 2. QuickBooks text is treated as untrusted input
 
@@ -93,10 +94,6 @@ Details that matter:
 banner rather than blocking the response — silently swallowing a P&L is worse
 than the risk it mitigates.
 
-> The two halves fail in deliberately opposite directions. The write gate fails
-> closed because a missed prompt is unrecoverable. The read sanitizer fails open
-> because a blocked report is merely annoying. Both are intentional.
-
 ### Read-only is a first-class mode
 
 Two launch wrappers are provided. Prefer the read-only one for anything that
@@ -112,6 +109,9 @@ the catalogue rather than merely discouraged. Both wrappers read the OAuth
 client secret from the **macOS Keychain** rather than `.env`, so anything that
 merely reads `.env` gets a refresh token it cannot use.
 
+**Register only one at a time.** `bin/qbo-write` already includes every read
+tool, so registering both adds 70 duplicate read tools and no protection.
+
 ---
 
 ## Quick Start
@@ -125,21 +125,26 @@ npm install
 npm run build
 ```
 
+`npm install` reports vulnerabilities. Most are in the test toolchain, which
+never runs against your books:
+
+```bash
+npm audit --omit=dev    # what actually ships: 4 (2 moderate, 2 high)
+npm audit               # everything incl. Jest's chain: ~12, incl. 1 critical
+```
+
+The critical one is in `handlebars`, a transitive dev dependency. The only
+production-relevant high is `fast-xml-parser`, via `node-quickbooks`.
+
 ### Configuration
 
 Copy `.env.example` to `.env` and fill in your Intuit app credentials:
 
 ```bash
 QUICKBOOKS_CLIENT_ID=your_client_id
-QUICKBOOKS_CLIENT_SECRET=your_client_secret
 QUICKBOOKS_REFRESH_TOKEN=your_refresh_token
 QUICKBOOKS_REALM_ID=your_realm_id
 QUICKBOOKS_ENVIRONMENT=sandbox        # or production
-
-# Optional: suppress whole tool categories at registration time
-# QUICKBOOKS_DISABLE_WRITE=true
-# QUICKBOOKS_DISABLE_UPDATE=true
-# QUICKBOOKS_DISABLE_DELETE=true
 ```
 
 #### Store the client secret in the Keychain
@@ -152,10 +157,10 @@ Create the entry once — it prompts twice, with no echo:
 security add-generic-password -a "$(id -un)" -s qbo-prod-client-secret -U -w
 ```
 
-Override the account name with `QBO_KEYCHAIN_ACCOUNT` if you need to. Deliberately
-**do not** put `QUICKBOOKS_CLIENT_SECRET` in `.env`: dotenv runs with
-`override: true`, so a value there beats the one the wrapper exports and silently
-defeats the split.
+Override the account name with `QBO_KEYCHAIN_ACCOUNT` if you need to.
+Deliberately **do not** put `QUICKBOOKS_CLIENT_SECRET` in `.env`: dotenv runs
+with `override: true`, so a value there beats the one the wrapper exports and
+silently defeats the split.
 
 If you're not on macOS, or you launch `dist/index.js` directly instead of through
 `bin/`, put `QUICKBOOKS_CLIENT_SECRET` in `.env` and accept that the secret and
@@ -164,70 +169,55 @@ the refresh token live in the same file.
 See [Authentication](#authentication) for how to obtain a refresh token —
 sandbox and production differ, and production is the fiddly one.
 
-### Claude Code integration
-
-Register the server. The name you choose here matters — see the warning below.
+### Register the server
 
 ```bash
 claude mcp add qbo-write --scope user -- /absolute/path/to/quickbooks-mcp/bin/qbo-write
 ```
 
-Then enable the write gate in `~/.claude/settings.json`. **Both entries are
-required.**
+The server name you choose here is load-bearing for the approval gate below.
 
-```json
-{
-  "permissions": {
-    "ask": [
-      "mcp__qbo-write__create_*", "mcp__qbo-write__update_*", "mcp__qbo-write__delete_*",
-      "mcp__qbo-write__create-*", "mcp__qbo-write__update-*", "mcp__qbo-write__delete-*"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "mcp__qbo-write__(create|update|delete).*",
-        "hooks": [
-          { "type": "command", "command": "/absolute/path/to/quickbooks-mcp/bin/qbo-confirm-hook" }
-        ]
-      }
-    ]
-  }
-}
+### Installing the approval gate
+
+The gate is enforced by Claude Code's `permissions.ask` rules. Generate them:
+
+```bash
+npm run build && ./bin/qbo-gen-ask-rules
 ```
 
-Restart Claude Code afterwards — hooks and permission rules are read at startup.
+That prints a JSON block naming the 52 always-ask tools. Merge it into
+`~/.claude/settings.json` and **restart Claude Code** — permission rules are read
+at startup.
 
-> ### ⚠️ Do not skip the `permissions.ask` rules
->
-> A `PreToolUse` hook on its own is **advisory**. Claude Code's documentation is
-> explicit that deny and ask rules are evaluated *regardless of what a
-> PreToolUse hook returns*, and in `auto` mode a classifier resolves the hook's
-> `ask` decision **without involving you**.
->
-> This was found the hard way: two near-identical `create_estimate` calls in one
-> session, one prompted and one executed silently against production. The `ask`
-> rule is what guarantees the prompt, in every permission mode. The hook only
-> supplies the human-readable summary shown inside it.
->
-> Both separators are needed — six tools use the legacy hyphen form
-> (`create-bill`, `create-vendor`, `update-bill`, `update-vendor`,
-> `delete-bill`, `delete-vendor`).
+```bash
+./bin/qbo-gen-ask-rules --server my-qbo   # if you registered under another name
+./bin/qbo-gen-ask-rules --check           # verify every mutating tool is classified
+```
 
-**The matcher is keyed on the MCP server name.** If you register this server
-under a different name, update the matcher to match. Registering it a second
-time under another name silently bypasses the gate — `bin/qbo-write` carries a
-comment saying so.
+> ### ⚠️ Do not replace the generated list with a wildcard
+>
+> A broad rule like `mcp__qbo-write__create_*` looks equivalent and is not. It
+> also matches the 19 master-data tools, and Claude Code's docs are explicit
+> that "a matching ask rule still prompts even when the hook returned `allow`" —
+> so a broad rule cannot be narrowed afterwards. You would get an approval
+> prompt for every new customer and vendor.
+>
+> The list also mixes two naming conventions: six tools use a legacy hyphen form,
+> and two of those (`create-vendor`, `update-vendor`) are master data that must
+> **not** be in the rules. Generate it rather than writing it by hand.
+
+Run `./bin/qbo-gen-ask-rules --check` after upgrading. It exits non-zero and
+names any mutating tool missing from the tier tables — a tool that would
+otherwise execute with no prompt.
 
 ### Verify the gate actually fires
 
 Don't take it on trust. Ask your assistant to create an estimate for a
 nonexistent customer, then **decline** at the prompt:
 
-- A prompt appears → the gate works.
-- No prompt, and the call reaches QuickBooks → the `ask` rules or the hook
-  aren't loaded. Check that you restarted, and that the matcher matches your
-  registered server name.
+- A dialog appears naming `create_estimate` → the gate works.
+- No dialog, and the call reaches QuickBooks → the rules aren't loaded. Check
+  that you restarted, and that the rules match your registered server name.
 
 Using a nonexistent customer ref means an accidental approval is rejected by
 QuickBooks rather than creating anything.
@@ -609,7 +599,7 @@ QUICKBOOKS_ENVIRONMENT=sandbox  # or 'production'
 - **Only tested on macOS with Claude Code.** The hook is a Claude Code
   integration; other MCP clients get the sanitizer but no confirmation gate.
 
-Test suite: 36 suites, 818 tests, with a 100% coverage gate on `src/`.
+Test suite: 34 suites, 771 tests, with a 100% coverage gate on `src/`.
 
 ---
 

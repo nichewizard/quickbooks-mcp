@@ -36,13 +36,10 @@ their upstream versions:
 
 The following files are new in this distribution:
 
-  bin/qbo-confirm-hook                       Claude Code PreToolUse hook
+  bin/qbo-gen-ask-rules                      generates the approval-gate rules
   src/helpers/mutation-tiers.ts              risk tiers, name normalization
-  src/helpers/describe-mutation.ts           plain-English mutation summaries
   src/helpers/sanitize-qbo-text.ts           untrusted-text delimiting + flags
-  tests/unit/bin/qbo-confirm-hook.test.ts
   tests/unit/helpers/mutation-tiers.test.ts
-  tests/unit/helpers/describe-mutation.test.ts
   tests/unit/helpers/sanitize-qbo-text.test.ts
 
 No upstream tool, handler, or QuickBooks API behaviour was changed. The tool

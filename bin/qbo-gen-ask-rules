@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+/**
+ * Print the `permissions.ask` rules that gate this server's risky tools.
+ *
+ * Why this exists: the confirmation gate is enforced by Claude Code's
+ * permission rules, not by this server. Those rules must name the risky tools
+ * exactly, because a broad pattern like `mcp__qbo-write__create_*` also matches
+ * the low-risk master-data tools and makes every new customer or vendor prompt
+ * too — Claude Code's docs are explicit that "a matching ask rule still prompts
+ * even when the hook returned allow", so a broad rule cannot be narrowed later.
+ *
+ * The list is 52 entries with two naming conventions mixed in (six tools use a
+ * legacy hyphen form, and two of those are low-risk), so hand-writing it is a
+ * reliable way to get it wrong. This derives it from the tier tables in
+ * src/helpers/mutation-tiers.ts instead, and stays correct if tools are added.
+ *
+ * Usage:
+ *   npm run build && ./bin/qbo-gen-ask-rules              # print the JSON block
+ *   ./bin/qbo-gen-ask-rules --server my-qbo               # different MCP server name
+ *   ./bin/qbo-gen-ask-rules --check                       # exit 1 if any tool is unclassified
+ */
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(HERE, "..");
+
+const argv = process.argv.slice(2);
+const serverIdx = argv.indexOf("--server");
+const SERVER = serverIdx !== -1 ? argv[serverIdx + 1] : "qbo-write";
+const CHECK = argv.includes("--check");
+
+const tiersPath = path.join(ROOT, "dist", "helpers", "mutation-tiers.js");
+if (!existsSync(tiersPath)) {
+  console.error("Run `npm run build` first — this reads the compiled tier tables.");
+  process.exit(1);
+}
+const { classifyTool, normalizeToolName } = await import(pathToFileURL(tiersPath).href);
+
+const toolsDir = path.join(ROOT, "src", "tools");
+const names = readdirSync(toolsDir)
+  .filter((f) => f.endsWith(".tool.ts"))
+  .map((f) => readFileSync(path.join(toolsDir, f), "utf8").match(/const toolName\s*=\s*"([^"]+)"/))
+  .filter(Boolean)
+  .map((m) => m[1]);
+
+const byTier = { ALWAYS: [], AUTO: [], READ: [] };
+const unclassified = [];
+for (const n of names) {
+  const t = classifyTool(normalizeToolName(n));
+  if (t === "ALWAYS") byTier.ALWAYS.push(n);
+  else if (t === "AUTO") byTier.AUTO.push(n);
+  else if (/^(create|update|delete)[_-]/.test(normalizeToolName(n))) unclassified.push(n);
+  else byTier.READ.push(n);
+}
+
+if (unclassified.length) {
+  console.error(`\nUNCLASSIFIED MUTATING TOOLS (${unclassified.length}) — these would NOT prompt:`);
+  for (const n of unclassified) console.error(`  ${n}`);
+  console.error("\nAdd them to ALWAYS_TOOLS or AUTO_TOOLS in src/helpers/mutation-tiers.ts.");
+  process.exit(1);
+}
+
+if (CHECK) {
+  console.log(`OK — ${names.length} tools: ${byTier.ALWAYS.length} always-ask, ` +
+              `${byTier.AUTO.length} auto, ${byTier.READ.length} read. None unclassified.`);
+  process.exit(0);
+}
+
+const rules = byTier.ALWAYS.sort().map((n) => `mcp__${SERVER}__${n}`);
+
+console.log(`// ${rules.length} always-ask tools. ${byTier.AUTO.length} master-data tools are`);
+console.log(`// deliberately absent so they execute without prompting.`);
+console.log(`// Merge into ~/.claude/settings.json, then restart Claude Code.`);
+console.log(JSON.stringify({ permissions: { ask: rules } }, null, 2));
