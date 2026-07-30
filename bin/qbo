@@ -1,0 +1,33 @@
+#!/bin/zsh
+# QuickBooks MCP — PRODUCTION, READ-ONLY.
+#
+# Pulls the client secret from the macOS Keychain and passes it as an env
+# var so it is never stored in .env on disk. Writes/updates/deletes are
+# disabled here; the write tools are not registered at all, so they do not
+# appear in the tool catalog.
+#
+# Full read/write posture lives in the sibling script `qbo-write`.
+
+set -eu
+
+SERVICE="qbo-prod-client-secret"
+ACCOUNT="${QBO_KEYCHAIN_ACCOUNT:-$(id -un)}"
+APP_DIR="${0:A:h}/.."
+
+if ! SECRET=$(security find-generic-password -a "$ACCOUNT" -s "$SERVICE" -w 2>/dev/null); then
+  print -u2 "FATAL: could not read '$SERVICE' from the login Keychain."
+  print -u2 "Re-add it with:"
+  print -u2 "  security add-generic-password -a $ACCOUNT -s $SERVICE -U -w"
+  exit 1
+fi
+
+export QUICKBOOKS_CLIENT_SECRET="$SECRET"
+unset SECRET
+
+# Read-only posture. These are absent from .env on purpose — dotenv runs
+# with override:true, so a value in .env would win over anything set here.
+export QUICKBOOKS_DISABLE_WRITE=true
+export QUICKBOOKS_DISABLE_UPDATE=true
+export QUICKBOOKS_DISABLE_DELETE=true
+
+exec node "$APP_DIR/dist/index.js" "$@"

@@ -1,0 +1,42 @@
+#!/bin/zsh
+# QuickBooks MCP — PRODUCTION, FULL READ/WRITE/UPDATE/DELETE.
+#
+# This registers every write tool against REAL books: create, modify, void
+# and DELETE invoices, journal entries, payments, vendors, accounts. It can
+# also email invoices to real customers.
+#
+# There is no confirmation gate inside the server. The gate lives entirely
+# outside this process, in ~/.claude/settings.json's PreToolUse hook, which
+# is matched by MCP SERVER NAME: "mcp__qbo-write__(create|update|delete).*".
+# That name comes from whatever key this script is registered under in
+# Claude Code's MCP config — NOT from this filename. If this script is ever
+# registered under a different server name (a second entry, a rename, a
+# per-project override), every mutation it exposes silently bypasses the
+# confirmation gate with no error and no warning. If you rename or re-add
+# this server, update the hook's matcher in ~/.claude/settings.json to match.
+#
+# Recovery is QuickBooks Settings -> Audit Log, which records every change
+# with a timestamp and the connecting app.
+#
+# Prefer the read-only `qbo` wrapper for anything that only reads.
+
+set -eu
+
+SERVICE="qbo-prod-client-secret"
+ACCOUNT="${QBO_KEYCHAIN_ACCOUNT:-$(id -un)}"
+APP_DIR="${0:A:h}/.."
+
+if ! SECRET=$(security find-generic-password -a "$ACCOUNT" -s "$SERVICE" -w 2>/dev/null); then
+  print -u2 "FATAL: could not read '$SERVICE' from the login Keychain."
+  print -u2 "Re-add it with:"
+  print -u2 "  security add-generic-password -a $ACCOUNT -s $SERVICE -U -w"
+  exit 1
+fi
+
+export QUICKBOOKS_CLIENT_SECRET="$SECRET"
+unset SECRET
+
+# Deliberately does NOT set QUICKBOOKS_DISABLE_WRITE/UPDATE/DELETE, which
+# leaves the full 141-tool catalog registered.
+
+exec node "$APP_DIR/dist/index.js" "$@"

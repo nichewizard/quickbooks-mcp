@@ -1,0 +1,88 @@
+#!/usr/bin/env node
+/**
+ * Claude Code PreToolUse hook: the human gate for QuickBooks mutations.
+ *
+ * Reads the hook payload on stdin and emits a permission decision. This is
+ * the only component that can force a human decision - a server-side
+ * two-phase token cannot, because nothing stops an agent from calling
+ * preview and commit back to back without showing anyone.
+ *
+ * FAILS CLOSED: any error produces "ask". A broken gate must never become an
+ * open gate. Always exits 0 with an explicit decision.
+ *
+ * Plain JS on purpose: tsconfig.json only compiles src/, so this file is not
+ * built. It imports the compiled helper from dist/.
+ */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+function emit(permissionDecision, permissionDecisionReason) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision,
+        permissionDecisionReason,
+      },
+    })
+  );
+  process.exit(0);
+}
+
+function readStdin() {
+  try {
+    return readFileSync(0, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+async function main() {
+  let payload;
+  try {
+    payload = JSON.parse(readStdin());
+  } catch (e) {
+    emit("ask", `qbo-confirm-hook failed to parse the hook payload: ${e.message}. Asking by default.`);
+    return;
+  }
+
+  const toolName = payload && typeof payload.tool_name === "string" ? payload.tool_name : null;
+  if (toolName === null) {
+    emit("ask", "qbo-confirm-hook found no tool_name in the hook payload. Asking by default.");
+    return;
+  }
+
+  let describeMutation;
+  try {
+    ({ describeMutation } = await import(
+      path.join(HERE, "..", "dist", "helpers", "describe-mutation.js")
+    ));
+  } catch (e) {
+    emit("ask", `qbo-confirm-hook could not load the summarizer (run npm run build): ${e.message}. Asking by default.`);
+    return;
+  }
+
+  try {
+    const params = payload.tool_input ?? {};
+    const d = describeMutation(toolName, params);
+    // Allowlist, not a denylist: only the one tier we explicitly recognize
+    // as safe may proceed. An unrecognized or missing tier - a renamed tier,
+    // a newly added tier, src/dist drift - must fail closed to "ask", not
+    // silently fall through to "allow".
+    const allowed = d !== null && typeof d === "object" && d.tier === "AUTO";
+    const reason =
+      d && typeof d.summary === "string" && d.summary !== ""
+        ? d.summary
+        : `qbo-confirm-hook got an unusable description for ${toolName}. Asking by default.`;
+    emit(allowed ? "allow" : "ask", reason);
+  } catch (e) {
+    emit("ask", `qbo-confirm-hook failed to summarize ${toolName}: ${e.message}. Asking by default.`);
+  }
+}
+
+main().catch((e) => {
+  emit("ask", `qbo-confirm-hook crashed: ${e && e.message ? e.message : String(e)}. Asking by default.`);
+});

@@ -1,0 +1,62 @@
+#!/bin/zsh
+# Write the production refresh token + realm ID into .env safely.
+#
+# The token is read from a hidden prompt, so it never appears in your shell
+# history, in the process list (argv), or in terminal scrollback.
+#
+# Usage:  ./bin/qbo-set-token
+
+set -eu
+
+ENV_FILE="${0:A:h}/../.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  print -u2 "FATAL: $ENV_FILE not found."
+  exit 1
+fi
+
+print "Paste the values from the Intuit OAuth Playground."
+print "The refresh token will not be echoed.\n"
+
+printf 'Refresh token: '
+read -rs REFRESH_TOKEN
+print ""
+printf 'Realm ID (company ID): '
+read -r REALM_ID
+
+if [ -z "${REFRESH_TOKEN:-}" ] || [ -z "${REALM_ID:-}" ]; then
+  print -u2 "\nFATAL: both values are required. Nothing was written."
+  exit 1
+fi
+
+if [[ ! "$REALM_ID" =~ '^[0-9]+$' ]]; then
+  print -u2 "\nFATAL: realm ID should be all digits. Got something else; nothing written."
+  exit 1
+fi
+
+# Replace in place if present, else append. Mirrors the server's own
+# saveTokensToEnv() semantics so nothing else in the file is disturbed.
+set_key() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    # Use a temp file + rename for atomicity; never leave .env half-written.
+    local tmp="${ENV_FILE}.tmp.$$"
+    awk -v k="$key" -v v="$val" \
+      'BEGIN{FS=OFS="="} $1==k {print k "=" v; found=1; next} {print} END{if(!found) print k "=" v}' \
+      "$ENV_FILE" > "$tmp"
+    chmod 600 "$tmp"
+    mv "$tmp" "$ENV_FILE"
+  else
+    print "${key}=${val}" >> "$ENV_FILE"
+  fi
+}
+
+set_key QUICKBOOKS_REFRESH_TOKEN "$REFRESH_TOKEN"
+set_key QUICKBOOKS_REALM_ID "$REALM_ID"
+unset REFRESH_TOKEN
+
+chmod 600 "$ENV_FILE"
+
+print "\nWrote QUICKBOOKS_REFRESH_TOKEN and QUICKBOOKS_REALM_ID to .env (mode 600)."
+print "Realm ID: $REALM_ID"
+print "\nNext: verify with a read-only call."

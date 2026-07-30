@@ -1,0 +1,49 @@
+@nichewizard/quickbooks-mcp
+
+This product includes software originally developed as the QuickBooks Online
+MCP Server (upstream: https://github.com/intuit/quickbooks-online-mcp-server),
+licensed under the Apache License, Version 2.0. A copy of that license is
+included in the LICENSE file at the root of this repository.
+
+Note on upstream licensing: the upstream project's LICENSE file contains the
+Apache License 2.0, while its package.json declared "MIT". This distribution
+declares Apache-2.0, which is the stricter of the two, and complies with its
+attribution and change-notice requirements.
+
+
+MODIFICATIONS
+=============
+
+Per Apache License 2.0 section 4(b), the following files were modified from
+their upstream versions:
+
+  bin/qbo-write
+    Added a warning that the MCP server name this script is registered under
+    is load-bearing for the confirmation gate's matcher.
+
+  src/types/tool-definition.ts
+    Replaced the handler type with a structural signature. The MCP SDK's
+    ToolCallback generic exceeds TypeScript's instantiation depth when indexed
+    (TS2589), which made three test suites fail to compile.
+
+  src/helpers/register-tool.ts
+    Calls server.tool() through a structural type for the same TS2589 reason,
+    and wraps READ tool handlers with the response sanitizer described below.
+
+  tests/unit/helpers/register-tool.test.ts
+    Updated for the above; the previous handler-identity assertion no longer
+    holds for READ tools, which are now wrapped.
+
+The following files are new in this distribution:
+
+  bin/qbo-confirm-hook                       Claude Code PreToolUse hook
+  src/helpers/mutation-tiers.ts              risk tiers, name normalization
+  src/helpers/describe-mutation.ts           plain-English mutation summaries
+  src/helpers/sanitize-qbo-text.ts           untrusted-text delimiting + flags
+  tests/unit/bin/qbo-confirm-hook.test.ts
+  tests/unit/helpers/mutation-tiers.test.ts
+  tests/unit/helpers/describe-mutation.test.ts
+  tests/unit/helpers/sanitize-qbo-text.test.ts
+
+No upstream tool, handler, or QuickBooks API behaviour was changed. The tool
+catalogue is unchanged: 141 tools with writes enabled, 70 in read-only mode.

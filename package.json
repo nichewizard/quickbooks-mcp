@@ -1,0 +1,55 @@
+{
+  "name": "@nichewizard/quickbooks-mcp",
+  "version": "0.1.0",
+  "description": "QuickBooks Online MCP server for live books: every create, update and delete requires human approval with a plain-English summary, and all QuickBooks text is treated as untrusted input rather than instructions.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "lint:fix": "eslint --fix",
+    "lint": "eslint .",
+    "auth": "node dist/auth-server.js",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^16.4.7",
+    "intuit-oauth": "^4.0.0",
+    "node-quickbooks": "^2.0.50",
+    "open": "^9.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@jest/globals": "^30.3.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.13.10",
+    "eslint": "^9.22.0",
+    "eslint-config-prettier": "^10.1.1",
+    "globals": "^16.0.0",
+    "jest": "^30.2.0",
+    "prettier": "3.5.3",
+    "shx": "^0.3.4",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.26.1"
+  },
+  "author": "nichewizard",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nichewizard/quickbooks-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nichewizard/quickbooks-mcp/issues"
+  },
+  "homepage": "https://github.com/nichewizard/quickbooks-mcp#readme"
+}

@@ -1,0 +1,30 @@
+.qodo
+
+node_modules
+dist
+coverage
+
+.env
+.env.local
+.env.*.local
+tokens.json
+
+start.cmd
+
+# Local capture output (may contain real account balances)
+capture-*.txt
+
+
+# Transient OAuth redirect URL capture (contains a live auth code)
+authurl.txt
+
+# Files staged for upload into QuickBooks (may contain financial documents)
+attachments/
+
+# Agent scratch/diagnostic scripts must never be committed to the repo root.
+probe-*.mjs
+verify-*.mjs
+
+# Local development scaffolding and agent scratch output.
+docs/superpowers/
+.superpowers/

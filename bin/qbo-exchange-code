@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""
+Exchange a QuickBooks authorization code for production tokens.
+
+Why this exists: the repo's own `npm run auth` hardcodes
+http://localhost:8000/callback (quickbooks-client.ts line 119) and ignores
+QUICKBOOKS_REDIRECT_URI. Intuit's production environment rejects localhost
+redirect URIs outright, so that flow cannot work against real books.
+
+This script does the Step-12 token exchange manually instead:
+  - client secret is read from the macOS Keychain, never from disk
+  - the authorization code is typed at a hidden prompt, so it stays out of
+    shell history, out of the process list, and off the terminal
+  - nothing is sent anywhere except Intuit's token endpoint
+
+Usage:  ./bin/qbo-exchange-code
+"""
+
+import getpass
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(HERE, "..", ".env")
+TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+KEYCHAIN_SERVICE = "qbo-prod-client-secret"
+KEYCHAIN_ACCOUNT = os.environ.get("QBO_KEYCHAIN_ACCOUNT") or getpass.getuser()
+
+
+def die(msg):
+    print(f"\nFATAL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read_env():
+    if not os.path.exists(ENV_PATH):
+        die(f"{ENV_PATH} not found.")
+    values, lines = {}, []
+    with open(ENV_PATH, "r") as fh:
+        for line in fh.read().split("\n"):
+            lines.append(line)
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            values[k.strip()] = v.strip()
+    return values, lines
+
+
+def keychain_secret():
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password",
+             "-a", KEYCHAIN_ACCOUNT, "-s", KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        die(f"could not read '{KEYCHAIN_SERVICE}' from the login Keychain.\n"
+            f"Re-add it with:\n"
+            f"  security add-generic-password -a {KEYCHAIN_ACCOUNT} "
+            f"-s {KEYCHAIN_SERVICE} -U -w")
+    return out.stdout.strip()
+
+
+def parse_redirect_url(text):
+    """Pull code / realmId / state out of a pasted redirect URL."""
+    text = (text or "").strip()
+    if "code=" not in text:
+        return None, None, None
+    # Tolerate a bare query string as well as a full URL.
+    query = text.split("?", 1)[1] if "?" in text else text
+    q = urllib.parse.parse_qs(query)
+    get = lambda k: (q.get(k) or [None])[0]
+    return get("code"), get("realmId"), get("state")
+
+
+def read_redirect_url():
+    """Get the redirect URL without any interactive prompt.
+
+    Prompts are deliberately avoided: when this runs without an interactive
+    stdin (a Run button, a pipe, a non-tty shell) getpass blocks forever
+    waiting on input that can never arrive, which looks like a hang.
+
+    Order: clipboard, then ./authurl.txt, then a plain visible prompt only
+    if stdin really is a tty.
+    """
+    try:
+        text = subprocess.run(["pbpaste"], capture_output=True, text=True,
+                              timeout=10).stdout
+        code, realm, state = parse_redirect_url(text)
+        if code:
+            print("Read the redirect URL from your clipboard.")
+            return code, realm, state
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    side = os.path.join(HERE, "..", "authurl.txt")
+    if os.path.exists(side):
+        with open(side) as fh:
+            code, realm, state = parse_redirect_url(fh.read())
+        if code:
+            print(f"Read the redirect URL from {side}")
+            print("Delete that file once this succeeds.")
+            return code, realm, state
+
+    if sys.stdin.isatty():
+        print("Clipboard did not contain a redirect URL.")
+        raw = input("Paste the full redirect URL: ")
+        return parse_redirect_url(raw)
+
+    die("no redirect URL found.\n"
+        "Copy the full URL from your browser's address bar (the one\n"
+        "containing 'code=' and 'realmId='), then run this again. It reads\n"
+        "the clipboard directly, so no typing is needed.\n"
+        "Alternatively, save that URL to ./authurl.txt and re-run.")
+
+
+def write_env(lines, updates):
+    """Replace keys in place, append when absent. Preserves everything else."""
+    for key, val in updates.items():
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}="):
+                lines[i] = f"{key}={val}"
+                break
+        else:
+            lines.append(f"{key}={val}")
+
+    tmp = f"{ENV_PATH}.tmp.{os.getpid()}"
+    try:
+        # 0600 from creation, so the token is never briefly world-readable.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines))
+        os.replace(tmp, ENV_PATH)  # atomic within the same filesystem
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def main():
+    env, lines = read_env()
+
+    client_id = env.get("QUICKBOOKS_CLIENT_ID")
+    redirect_uri = env.get("QUICKBOOKS_REDIRECT_URI")
+    if not client_id:
+        die("QUICKBOOKS_CLIENT_ID missing from .env")
+    if not redirect_uri:
+        die("QUICKBOOKS_REDIRECT_URI missing from .env")
+    if env.get("QUICKBOOKS_ENVIRONMENT") != "production":
+        print(f"WARNING: QUICKBOOKS_ENVIRONMENT is "
+              f"'{env.get('QUICKBOOKS_ENVIRONMENT')}', not 'production'.\n")
+
+    client_secret = keychain_secret()
+
+    print("Exchanging an authorization code for production tokens.")
+    print(f"  redirect_uri : {redirect_uri}")
+    print(f"  client_id    : {client_id[:12]}...{client_id[-4:]}")
+    print("\nThe redirect_uri above MUST byte-for-byte match the one in the")
+    print("authorize URL and the one registered in your app's PRODUCTION")
+    print("Redirect URIs list - casing and trailing slash included.\n")
+
+    code, realm_id, state = read_redirect_url()
+
+    if not code:
+        die("no authorization code found. Nothing written.")
+    if not re.fullmatch(r"\d+", realm_id or ""):
+        die(f"realm ID must be all digits, got {realm_id!r}. Nothing written.")
+
+    print(f"  code     : {len(code)} chars")
+    print(f"  realm_id : {realm_id}")
+    print(f"  state    : {state or '(none returned)'}")
+
+    body = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }).encode()
+
+    req = urllib.request.Request(TOKEN_URL, data=body, method="POST")
+    req.add_header("Accept", "application/json")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    # Basic auth built here rather than passed on a command line, so the
+    # secret never appears in the process list.
+    import base64
+    basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    req.add_header("Authorization", f"Basic {basic}")
+
+    print("\nPOSTing to Intuit token endpoint...")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        print(f"\nToken exchange FAILED: HTTP {e.code}", file=sys.stderr)
+        print(detail[:800], file=sys.stderr)
+        print("\nMost common causes, in order:", file=sys.stderr)
+        print("  invalid_grant  -> the code was already used, or expired "
+              "(codes live ~10 min, single use). Re-authorize for a new one.",
+              file=sys.stderr)
+        print("  invalid_client -> client_id/secret mismatch, or you used "
+              "DEVELOPMENT keys against production.", file=sys.stderr)
+        print("  redirect_uri   -> does not match the authorize request "
+              "exactly, or is not in the PRODUCTION list.", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        die(f"network error reaching Intuit: {e.reason}")
+
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        die(f"response contained no refresh_token. Keys: {list(payload)}")
+
+    write_env(lines, {
+        "QUICKBOOKS_REFRESH_TOKEN": refresh_token,
+        "QUICKBOOKS_REALM_ID": realm_id,
+    })
+
+    days = payload.get("x_refresh_token_expires_in", 0) // 86400
+    print("\nSUCCESS.")
+    print(f"  refresh_token : {refresh_token[:6]}...{refresh_token[-4:]} "
+          f"({len(refresh_token)} chars)")
+    print(f"  realm_id      : {realm_id}")
+    print(f"  refresh token valid ~{days} days (rolling)")
+    print(f"\nWritten to .env (mode 600). The client secret stays in the "
+          f"Keychain and was not written to disk.")
+
+
+if __name__ == "__main__":
+    main()

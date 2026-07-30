@@ -1,0 +1,31 @@
+import { QuickbooksClient } from "../clients/quickbooks-client.js";
+import { ToolResponse } from "../types/tool-response.js";
+import { formatError } from "../helpers/format-error.js";
+
+export interface SearchTaxCodesInput {
+  name?: string;
+  active?: boolean;
+  taxable?: boolean;
+  limit?: number;
+}
+
+export async function searchQuickbooksTaxCodes(data: SearchTaxCodesInput): Promise<ToolResponse<any>> {
+  try {
+    const quickbooks = await QuickbooksClient.getInstance();
+    const criteria: Record<string, any> = {};
+    if (data.name) criteria.Name = data.name;
+    if (data.active !== undefined) criteria.Active = data.active;
+    if (data.taxable !== undefined) criteria.Taxable = data.taxable;
+    if (data.limit) criteria.limit = data.limit;
+
+    return new Promise((resolve) => {
+      (quickbooks as any).findTaxCodes(criteria, (err: any, result: any) => {
+        if (err) resolve({ result: null, isError: true, error: formatError(err) });
+        else resolve({ result: result?.QueryResponse?.TaxCode || [], isError: false, error: null });
+      });
+    });
+  } catch (error) {
+    return { result: null, isError: true, error: formatError(error) };
+  }
+}
+
